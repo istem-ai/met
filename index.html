@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vision AI · Image Classifier</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- TensorFlow.js + MobileNet (pinned versions) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+
+  <style>
+    body {
+      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4c1d95 100%);
+      background-attachment: fixed;
+    }
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(20px, -30px) scale(1.08); }
+    }
+    .blob { animation: float 12s ease-in-out infinite; }
+    .blob-delay { animation-delay: -6s; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
+    .fade-in { animation: fadeIn .35s ease both; }
+
+    @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    .slide-up { animation: slideUp .45s ease both; }
+
+    .drag-active {
+      border-color: rgba(255,255,255,.9) !important;
+      background: rgba(255,255,255,.18) !important;
+      transform: scale(1.01);
+      box-shadow: 0 0 0 4px rgba(217,70,239,.25);
+    }
+
+    /* ---------- Loading overlay ---------- */
+    #loaderOverlay { transition: opacity .6s ease, visibility .6s ease; }
+    #loaderOverlay.is-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+    @keyframes ring {
+      0%   { transform: scale(.8); opacity: .7; }
+      100% { transform: scale(1.9); opacity: 0; }
+    }
+    .ring { animation: ring 2s cubic-bezier(.2,.6,.3,1) infinite; }
+    .ring-2 { animation-delay: 1s; }
+
+    @keyframes bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-6px); }
+    }
+    .bob { animation: bob 2.4s ease-in-out infinite; }
+
+    @keyframes shimmer {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(250%); }
+    }
+    .shimmer::after {
+      content: "";
+      position: absolute; inset: 0; width: 40%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+
+    @keyframes dotFade { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+    .dot { animation: dotFade 1.4s infinite; }
+    .dot:nth-child(2) { animation-delay: .2s; }
+    .dot:nth-child(3) { animation-delay: .4s; }
+
+    @keyframes pop { 0% { transform: scale(.85); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+    .pop { animation: pop .5s ease both; }
+
+    /* ---------- Result bars ---------- */
+    .bar-fill {
+      width: 0;
+      transition: width .35s cubic-bezier(.22, 1, .36, 1);  /* short so live updates feel responsive */
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 18px; height: 18px; border-radius: 9999px;
+      border: 2px solid rgba(255,255,255,.25);
+      border-top-color: #fff;
+      animation: spin .8s linear infinite;
+    }
+
+    /* ---------- Webcam ---------- */
+    /* Mirror the preview so it feels like a mirror (classification uses the raw frame) */
+    #video { transform: scaleX(-1); }
+
+    @keyframes livePulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(244,63,94,.6); }
+      50%      { box-shadow: 0 0 0 6px rgba(244,63,94,0); }
+    }
+    .live-dot { animation: livePulse 1.6s ease-in-out infinite; }
+
+    /* Soft scanning line over the live video */
+    @keyframes scan {
+      0%   { top: 0; opacity: 0; }
+      10%  { opacity: .8; }
+      90%  { opacity: .8; }
+      100% { top: 100%; opacity: 0; }
+    }
+    .scanline {
+      position: absolute; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(232,121,249,.9), transparent);
+      animation: scan 3s linear infinite;
+    }
+  </style>
+</head>
+<body class="min-h-screen text-white font-sans antialiased relative overflow-x-hidden">
+
+  <!-- Decorative background blobs -->
+  <div class="pointer-events-none fixed inset-0 -z-0 overflow-hidden">
+    <div class="blob absolute -top-24 -left-24 w-96 h-96 rounded-full bg-fuchsia-500/40 blur-3xl"></div>
+    <div class="blob blob-delay absolute top-1/3 -right-24 w-96 h-96 rounded-full bg-indigo-400/40 blur-3xl"></div>
+    <div class="blob absolute -bottom-32 left-1/4 w-96 h-96 rounded-full bg-cyan-400/30 blur-3xl"></div>
+  </div>
+
+  <div class="relative z-10 min-h-screen flex items-center justify-center p-4 sm:p-8">
+
+    <!-- ============ MAIN GLASS CARD ============ -->
+    <main class="relative overflow-hidden w-full max-w-2xl rounded-3xl border border-white/20 bg-white/10 backdrop-blur-xl shadow-2xl shadow-black/30 p-6 sm:p-10">
+
+      <!-- ---------- HEADER ---------- -->
+      <header class="flex items-center justify-between gap-3 mb-8">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-11 h-11 shrink-0 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-fuchsia-500/30">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <h1 class="text-xl sm:text-2xl font-semibold tracking-tight">Vision AI</h1>
+            <p class="text-xs sm:text-sm text-white/60 truncate">Instant on-device image classification</p>
+          </div>
+        </div>
+
+        <div id="aiBadge" aria-live="polite"
+             class="shrink-0 inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full border bg-amber-400/15 border-amber-300/40 text-amber-200 transition-colors duration-500">
+          <span id="aiBadgeDot" class="w-2 h-2 rounded-full bg-amber-300 animate-pulse"></span>
+          <span id="aiBadgeText">Loading AI</span>
+        </div>
+      </header>
+
+      <!-- ---------- IMAGE / VIDEO CONTAINER (square) ---------- -->
+      <section>
+        <div id="imageContainer"
+             tabindex="0"
+             role="button"
+             aria-label="Upload an image by dropping a file or pressing Enter to browse"
+             class="relative aspect-square w-full rounded-2xl border-2 border-dashed border-white/30 bg-white/5 hover:bg-white/10 hover:border-white/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 transition-all duration-300 cursor-pointer overflow-hidden">
+
+          <input id="fileInput" type="file" accept="image/png,image/jpeg" class="hidden" />
+
+          <!-- Drop-zone placeholder -->
+          <div id="placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-center p-6">
+            <div class="w-20 h-20 rounded-full bg-white/10 border border-white/20 flex items-center justify-center mb-4">
+              <svg class="w-10 h-10 text-white/80" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5V18a2.25 2.25 0 002.25 2.25h13.5A2.25 2.25 0 0021 18v-1.5M7.5 9L12 4.5 16.5 9M12 4.5V16"/>
+              </svg>
+            </div>
+            <p class="text-lg font-medium">Drag &amp; drop your image here</p>
+            <p class="text-sm text-white/60 mt-1">or click to browse files</p>
+            <p class="text-xs text-white/40 mt-4">JPG · PNG</p>
+          </div>
+
+          <!-- Uploaded image preview -->
+          <img id="preview" alt="Selected image preview"
+               class="hidden absolute inset-0 w-full h-full object-contain bg-black/20 fade-in select-none" draggable="false" />
+
+          <!-- NEW: Live webcam feed (same square container) -->
+          <video id="video" autoplay playsinline muted
+                 class="hidden absolute inset-0 w-full h-full object-cover bg-black"></video>
+
+          <!-- NEW: Webcam overlays (LIVE tag + scan line) -->
+          <div id="liveOverlay" class="hidden pointer-events-none absolute inset-0">
+            <div class="scanline"></div>
+            <div class="absolute top-3 left-3 inline-flex items-center gap-2 text-[11px] font-semibold tracking-widest px-2.5 py-1 rounded-full bg-black/50 backdrop-blur-md border border-white/20">
+              <span class="live-dot w-2 h-2 rounded-full bg-rose-500"></span>
+              LIVE
+            </div>
+          </div>
+
+          <!-- NEW: Camera starting spinner -->
+          <div id="camStarting" class="hidden absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/50 backdrop-blur-sm text-sm text-white/80">
+            <div class="spinner"></div>
+            <span>Starting camera…</span>
+          </div>
+
+          <!-- Subtle clear (X) button — also stops the webcam -->
+          <button id="removeBtn" type="button" aria-label="Remove image" title="Remove image"
+                  class="hidden absolute top-3 right-3 z-10 w-8 h-8 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md border border-white/20 text-white/70 hover:text-white items-center justify-center transition-all hover:scale-110 active:scale-95">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18"/>
+            </svg>
+          </button>
+        </div>
+
+        <p id="errorMsg" role="alert" class="hidden mt-3 text-sm text-rose-200 bg-rose-500/20 border border-rose-300/30 rounded-xl px-4 py-2"></p>
+      </section>
+
+      <!-- ---------- ACTION BUTTONS ---------- -->
+      <section class="mt-5 flex flex-col sm:flex-row gap-3">
+        <!-- Toggle: label + colors are swapped by JS (Part 2) -->
+        <button id="webcamBtn" type="button" aria-pressed="false"
+                class="flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 font-medium bg-gradient-to-r from-fuchsia-500 to-indigo-500 hover:from-fuchsia-400 hover:to-indigo-400 shadow-lg shadow-indigo-500/30 active:scale-[0.98] transition-all">
+          <svg id="webcamIcon" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5l4.5-2.6v8.2L15 13.5M4.5 6.75h8.25A2.25 2.25 0 0115 9v6a2.25 2.25 0 01-2.25 2.25H4.5A2.25 2.25 0 012.25 15V9A2.25 2.25 0 014.5 6.75z"/>
+          </svg>
+          <span id="webcamBtnLabel">Webcam Mode</span>
+        </button>
+
+        <button id="clearBtn" type="button"
+                class="sm:w-40 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 font-medium bg-white/10 hover:bg-white/20 border border-white/20 active:scale-[0.98] transition-all">
+          Clear
+        </button>
+      </section>
+
+      <div class="my-8 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent"></div>
+
+      <!-- ---------- AI ANALYSIS RESULTS ---------- -->
+      <section>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-semibold uppercase tracking-widest text-white/60">AI Analysis Results</h2>
+          <div class="flex items-center gap-3">
+            <!-- NEW: shown only while the webcam loop is running -->
+            <span id="liveTag" class="hidden items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-rose-200">
+              <span class="live-dot w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+              Live · every 300 ms
+            </span>
+            <span class="text-xs text-white/40">Top 3</span>
+          </div>
+        </div>
+
+        <div id="resultsContainer" aria-live="polite"
+             class="min-h-[160px] rounded-2xl border border-white/15 bg-black/10 p-5 flex items-center justify-center text-sm text-white/40">
+          Results will appear here
+        </div>
+      </section>
+
+      <footer class="mt-8 text-center text-[11px] text-white/40">
+        No uploads · No servers · No accounts
+      </footer>
+
+      <!-- ============ LOADING OVERLAY ============ -->
+      <div id="loaderOverlay"
+           role="status" aria-live="polite"
+           class="absolute inset-0 z-30 flex flex-col items-center justify-center text-center px-8 bg-indigo-950/60 backdrop-blur-md">
+
+        <div class="relative w-24 h-24 flex items-center justify-center mb-6">
+          <span class="ring absolute inset-0 rounded-full border-2 border-fuchsia-400/60"></span>
+          <span class="ring ring-2 absolute inset-0 rounded-full border-2 border-indigo-300/60"></span>
+          <div class="bob relative w-20 h-20 rounded-3xl bg-gradient-to-br from-fuchsia-500 to-indigo-500 shadow-xl shadow-fuchsia-500/40 flex items-center justify-center">
+            <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/>
+            </svg>
+          </div>
+        </div>
+
+        <h2 id="loaderTitle" class="text-xl sm:text-2xl font-semibold tracking-tight">
+          <span id="loaderText">Waking up the AI</span><span id="loaderDots" aria-hidden="true"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>
+        </h2>
+        <p id="loaderSub" class="text-sm text-white/60 mt-1">Downloading the model to your browser</p>
+
+        <div class="w-full max-w-xs mt-6">
+          <div class="relative h-2.5 rounded-full bg-white/15 overflow-hidden"
+               role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack">
+            <div id="progressBar"
+                 class="shimmer relative h-full w-0 rounded-full overflow-hidden bg-gradient-to-r from-fuchsia-400 via-indigo-400 to-cyan-300"></div>
+          </div>
+          <div class="mt-2 text-xs tabular-nums text-white/50" id="progressPct">0%</div>
+        </div>
+
+        <button id="retryBtn" type="button"
+                class="hidden mt-6 rounded-xl px-5 py-2.5 text-sm font-medium bg-white/15 hover:bg-white/25 border border-white/25 active:scale-95 transition">
+          Try again
+        </button>
+      </div>
+
+    </main>
+  </div>
+<!-- ============ 1. IMAGE INPUT + SHARED SCREEN STATE ============ -->
+<script>
+  (() => {
+    const $ = (id) => document.getElementById(id);
+    const container   = $('imageContainer');
+    const fileInput   = $('fileInput');
+    const placeholder = $('placeholder');
+    const preview     = $('preview');
+    const removeBtn   = $('removeBtn');
+    const clearBtn    = $('clearBtn');
+    const errorMsg    = $('errorMsg');
+    const results     = $('resultsContainer');
+
+    const ALLOWED = ['image/png', 'image/jpeg'];
+    const MAX_MB = 20;
+    const DEFAULT_RESULTS_TEXT = results.textContent.trim();
+
+    let currentUrl = null;
+    let dragDepth = 0;
+
+    // Shared state used by the webcam script.  mode: 'idle' | 'image' | 'webcam'
+    const App = (window.App = { mode: 'idle' });
+
+    function showError(msg) { errorMsg.textContent = msg; errorMsg.classList.remove('hidden'); }
+    function hideError() { errorMsg.classList.add('hidden'); errorMsg.textContent = ''; }
+
+    // Container look while it holds content (image or live video)
+    function setOccupied(on) {
+      placeholder.classList.toggle('hidden', on);
+      removeBtn.classList.toggle('hidden', !on);
+      removeBtn.classList.toggle('flex', on);
+      container.classList.toggle('border-dashed', !on);
+      container.classList.toggle('border-solid', on);
+      container.classList.toggle('cursor-pointer', !on);
+      container.classList.toggle('cursor-default', on);
+      if (on) container.classList.add('border-white/20');
+      else container.classList.remove('border-white/20', 'drag-active');
+    }
+
+    function displayImage(file) {
+      hideError();
+      if (!file) return;
+      if (!ALLOWED.includes(file.type)) return showError('Unsupported file type. Please choose a PNG or JPEG image.');
+      if (file.size > MAX_MB * 1024 * 1024) return showError(`File is too large. Maximum size is ${MAX_MB} MB.`);
+
+      // Dropping a file while the webcam is on switches to the image
+      if (window.Webcam) window.Webcam.stop();
+
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = URL.createObjectURL(file);
+
+      preview.onload = () => {
+        preview.classList.remove('hidden');
+        setOccupied(true);
+        App.mode = 'image';
+        container.dispatchEvent(new CustomEvent('imageloaded', {
+          bubbles: true, detail: { element: preview, file }
+        }));
+      };
+      preview.onerror = () => {
+        resetScreen();
+        showError('This image could not be read. Try a different file.');
+      };
+      preview.src = currentUrl;
+    }
+
+    function resetScreen() {
+      if (window.Webcam) window.Webcam.stop();      // safe if already stopped
+      if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
+      preview.onload = preview.onerror = null;
+      preview.removeAttribute('src');
+      preview.classList.add('hidden');
+      setOccupied(false);
+      App.mode = 'idle';
+      fileInput.value = '';
+      hideError();
+      results.textContent = DEFAULT_RESULTS_TEXT;
+      container.dispatchEvent(new CustomEvent('imagecleared', { bubbles: true }));
+    }
+
+    Object.assign(App, { resetScreen, showError, hideError, setOccupied });
+
+    // Click / keyboard to browse (only when the container is empty)
+    container.addEventListener('click', () => { if (App.mode === 'idle') fileInput.click(); });
+    container.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && App.mode === 'idle' && e.target === container) {
+        e.preventDefault(); fileInput.click();
+      }
+    });
+    fileInput.addEventListener('change', (e) => displayImage(e.target.files[0]));
+
+    // Drag & drop
+    container.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; container.classList.add('drag-active'); });
+    container.addEventListener('dragover',  (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    container.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) container.classList.remove('drag-active');
+    });
+    container.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      container.classList.remove('drag-active');
+      displayImage(e.dataTransfer.files && e.dataTransfer.files[0]);
+    });
+    ['dragover', 'drop'].forEach((evt) => window.addEventListener(evt, (e) => e.preventDefault()));
+
+    // X and Clear both reset everything (and stop the webcam if it's on)
+    removeBtn.addEventListener('click', (e) => { e.stopPropagation(); resetScreen(); });
+    clearBtn.addEventListener('click', resetScreen);
+  })();
+</script>
+
+<!-- ============ 2. AI MODEL LOADER ============ -->
+<script>
+  (() => {
+    const $ = (id) => document.getElementById(id);
+    const overlay = $('loaderOverlay'), bar = $('progressBar'), track = $('progressTrack');
+    const pctLabel = $('progressPct'), text = $('loaderText'), dots = $('loaderDots');
+    const sub = $('loaderSub'), retryBtn = $('retryBtn');
+    const badge = $('aiBadge'), badgeDot = $('aiBadgeDot'), badgeText = $('aiBadgeText');
+
+    window.AI = { model: null, ready: false };
+
+    let progress = 0, target = 92, rafId = null;
+
+    function setProgress(p) {
+      const v = Math.min(100, Math.max(0, p));
+      bar.style.width = v + '%';
+      pctLabel.textContent = Math.round(v) + '%';
+      track.setAttribute('aria-valuenow', Math.round(v));
+    }
+    function animate() {
+      progress += (target - progress) * 0.018;
+      setProgress(progress);
+      rafId = requestAnimationFrame(animate);
+    }
+    function startProgress() {
+      cancelAnimationFrame(rafId);
+      progress = 0; target = 92;
+      setProgress(0);
+      rafId = requestAnimationFrame(animate);
+    }
+    function finishProgress() {
+      return new Promise((resolve) => {
+        cancelAnimationFrame(rafId);
+        const step = () => {
+          progress += (100 - progress) * 0.14;
+          if (progress > 99.5) { setProgress(100); return resolve(); }
+          setProgress(progress);
+          rafId = requestAnimationFrame(step);
+        };
+        step();
+      });
+    }
+
+    function setBadge(state) {
+      const base = 'shrink-0 inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors duration-500';
+      if (state === 'ready') {
+        badge.className = base + ' pop bg-emerald-400/20 border-emerald-300/50 text-emerald-200 shadow-lg shadow-emerald-500/20';
+        badgeDot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+        badgeText.textContent = 'AI Ready';
+      } else if (state === 'error') {
+        badge.className = base + ' bg-rose-400/20 border-rose-300/50 text-rose-200';
+        badgeDot.className = 'w-2 h-2 rounded-full bg-rose-400';
+        badgeText.textContent = 'AI Unavailable';
+      } else {
+        badge.className = base + ' bg-amber-400/15 border-amber-300/40 text-amber-200';
+        badgeDot.className = 'w-2 h-2 rounded-full bg-amber-300 animate-pulse';
+        badgeText.textContent = 'Loading AI';
+      }
+    }
+
+    async function loadModel() {
+      overlay.classList.remove('is-hidden');
+      retryBtn.classList.add('hidden');
+      dots.classList.remove('hidden');
+      text.textContent = 'Waking up the AI';
+      sub.textContent = 'Downloading the model to your browser';
+      setBadge('loading');
+      startProgress();
+
+      try {
+        if (typeof tf === 'undefined' || typeof mobilenet === 'undefined') {
+          throw new Error('TensorFlow.js or MobileNet failed to load from the CDN.');
+        }
+        await tf.ready();
+        const model = await mobilenet.load({ version: 2, alpha: 1.0 });
+
+        sub.textContent = 'Warming up the neural network';
+        const dummy = tf.zeros([224, 224, 3]);
+        await model.classify(dummy, 1);
+        dummy.dispose();
+
+        window.AI.model = model;
+        window.AI.ready = true;
+
+        await finishProgress();
+        await new Promise((r) => setTimeout(r, 350));
+
+        overlay.classList.add('is-hidden');
+        setBadge('ready');
+        document.dispatchEvent(new CustomEvent('modelready', { detail: { model } }));
+      } catch (err) {
+        console.error('Model load failed:', err);
+        cancelAnimationFrame(rafId);
+        setBadge('error');
+        text.textContent = 'Couldn’t wake the AI';
+        dots.classList.add('hidden');
+        sub.textContent = 'Check your internet connection and try again.';
+        retryBtn.classList.remove('hidden');
+      }
+    }
+
+    retryBtn.addEventListener('click', loadModel);
+    window.addEventListener('load', loadModel);
+  })();
+</script>
+
+<!-- ============ 3. CLASSIFICATION + RESULT BARS ============ -->
+<script>
+  (() => {
+    const container = document.getElementById('imageContainer');
+    const results   = document.getElementById('resultsContainer');
+
+    const BAR_STYLES = [
+      'from-fuchsia-400 to-indigo-400',
+      'from-indigo-400 to-sky-400',
+      'from-sky-400 to-cyan-300'
+    ];
+
+    let runId = 0;          // invalidates stale image results
+    let pendingImg = null;  // image waiting for the model to finish loading
+    let view = null;        // cached bar elements, reused for live updates
+
+    // "tiger, Panthera tigris" -> "Tiger"
+    const formatLabel = (name) => name.split(',')[0].trim().replace(/\b\w/g, (c) => c.toUpperCase());
+
+    function showMessage(html) {
+      view = null;
+      results.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.className = 'flex items-center gap-3 text-white/60 fade-in';
+      wrap.innerHTML = html;
+      results.appendChild(wrap);
+    }
+    const showAnalyzing = () => showMessage('<div class="spinner"></div><span>Analyzing image…</span>');
+
+    // Build the three bar rows once
+    function buildRows() {
+      results.innerHTML = '';
+      const list = document.createElement('div');
+      list.className = 'w-full space-y-5';
+      const rows = [];
+
+      for (let i = 0; i < 3; i++) {
+        const row = document.createElement('div');
+        row.className = 'slide-up';
+        row.style.animationDelay = (i * 100) + 'ms';
+
+        const head = document.createElement('div');
+        head.className = 'flex items-baseline justify-between gap-3 mb-2';
+
+        const name = document.createElement('span');
+        name.className = 'text-sm sm:text-base font-medium truncate ' + (i === 0 ? 'text-white' : 'text-white/80');
+        head.appendChild(name);
+
+        if (i === 0) {
+          const tag = document.createElement('span');
+          tag.className = 'shrink-0 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/15 border border-white/20 text-white/80';
+          tag.textContent = 'Best match';
+          head.appendChild(tag);
+        }
+
+        const trk = document.createElement('div');
+        trk.className = 'h-3 rounded-full bg-white/10 overflow-hidden';
+        trk.setAttribute('role', 'progressbar');
+        trk.setAttribute('aria-valuemin', '0');
+        trk.setAttribute('aria-valuemax', '100');
+
+        const fill = document.createElement('div');
+        fill.className = `bar-fill h-full rounded-full bg-gradient-to-r ${BAR_STYLES[i]}`;
+        trk.appendChild(fill);
+
+        row.append(head, trk);
+        list.appendChild(row);
+        rows.push({ name, trk, fill });
+      }
+
+      results.appendChild(list);
+      return { list, rows };
+    }
+
+    // Reuse existing rows if they're still on screen, otherwise build them
+    function getView() {
+      if (view && view.list.isConnected) return view;
+      return (view = buildRows());
+    }
+
+    // Write predictions into the rows. Existing bars animate from their current width.
+    function applyPredictions(v, predictions, { slow }) {
+      v.rows.forEach((r, i) => {
+        const p = predictions[i];
+        if (!p) return;
+        const pct = Math.round(p.probability * 100);
+        const label = formatLabel(p.className);
+        r.name.textContent = `${label} (${pct}%)`;
+        r.name.title = p.className;
+        r.trk.setAttribute('aria-label', label);
+        r.trk.setAttribute('aria-valuenow', String(pct));
+        r.fill.style.transitionDuration = slow ? '1s' : '350ms';
+        r.fill.style.transitionDelay = slow ? (i * 120 + 150) + 'ms' : '0ms';
+        // Two frames so a freshly built bar paints at 0 first, then animates
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          r.fill.style.width = Math.max(p.probability * 100, 1.5) + '%';
+        }));
+      });
+    }
+
+    // Uploaded image: fresh rows + the slower, staggered fill animation
+    function renderImageResults(predictions) {
+      view = null;
+      applyPredictions(getView(), predictions, { slow: true });
+    }
+
+    // Webcam: update the same rows in place, no rebuild
+    function renderLive(predictions) {
+      applyPredictions(getView(), predictions, { slow: false });
+    }
+
+    async function classifyImage(img) {
+      const model = window.AI && window.AI.model;
+      if (!model) {
+        pendingImg = img;
+        showMessage('<div class="spinner"></div><span>Waiting for the AI to finish loading…</span>');
+        return;
+      }
+      const myRun = ++runId;
+      showAnalyzing();
+      try {
+        await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
+        if (myRun !== runId) return;
+        const predictions = await model.classify(img, 3);
+        if (myRun !== runId) return;
+        renderImageResults(predictions);
+      } catch (err) {
+        if (myRun !== runId) return;
+        console.error('Classification failed:', err);
+        showMessage('<span class="text-rose-200">Something went wrong while analyzing this image. Please try another one.</span>');
+      }
+    }
+
+    // Used by the webcam loop: predict only; the caller decides whether to render
+    async function predict(source) {
+      const model = window.AI && window.AI.model;
+      return model ? model.classify(source, 3) : null;
+    }
+
+    // Public API for the webcam script
+    window.Classifier = { predict, renderLive, showMessage };
+
+    container.addEventListener('imageloaded', (e) => classifyImage(e.detail.element));
+    container.addEventListener('imagecleared', () => { runId++; pendingImg = null; view = null; });
+    document.addEventListener('modelready', () => {
+      if (pendingImg) { const img = pendingImg; pendingImg = null; classifyImage(img); }
+    });
+  })();
+</script>
+
+<!-- ============ 4. WEBCAM MODE (live loop every 300 ms) ============ -->
+<script>
+  (() => {
+    const $ = (id) => document.getElementById(id);
+    const video      = $('video');
+    const liveOverlay = $('liveOverlay');
+    const camStarting = $('camStarting');
+    const liveTag    = $('liveTag');
+    const btn        = $('webcamBtn');
+    const btnLabel   = $('webcamBtnLabel');
+    const btnIcon    = $('webcamIcon');
+
+    const INTERVAL_MS = 300;
+    const MAX_CONSECUTIVE_ERRORS = 3;
+
+    const BTN_BASE = 'flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 font-medium bg-gradient-to-r shadow-lg active:scale-[0.98] transition-all ';
+    const BTN_START = BTN_BASE + 'from-fuchsia-500 to-indigo-500 hover:from-fuchsia-400 hover:to-indigo-400 shadow-indigo-500/30';
+    const BTN_STOP  = BTN_BASE + 'from-rose-500 to-orange-500 hover:from-rose-400 hover:to-orange-400 shadow-rose-500/30';
+    const ICON_CAM  = btnIcon.innerHTML;
+    const ICON_STOP = '<rect x="6.5" y="6.5" width="11" height="11" rx="2.5" stroke-linecap="round" stroke-linejoin="round"/>';
+
+    let stream = null;
+    let active = false;      // camera is streaming and the loop is running
+    let starting = false;    // waiting for permission / first frame
+    let session = 0;         // bumped on every stop, so old async work bails out
+    let timer = null;
+    let errorStreak = 0;
+    let waitingShown = false;
+
+    function setButton(on) {
+      btn.className = on ? BTN_STOP : BTN_START;
+      btn.setAttribute('aria-pressed', String(on));
+      btnLabel.textContent = on ? 'Stop Webcam' : 'Webcam Mode';
+      btnIcon.innerHTML = on ? ICON_STOP : ICON_CAM;
+    }
+    function setLiveUI(on) {
+      video.classList.toggle('hidden', !on);
+      liveOverlay.classList.toggle('hidden', !on);
+      liveTag.classList.toggle('hidden', !on);
+      liveTag.classList.toggle('inline-flex', on);
+    }
+
+    // Tears down the camera + webcam UI. Safe to call any time.
+    // (Does NOT reset the image/results; App.resetScreen() does that.)
+    function stop() {
+      session++;
+      clearTimeout(timer); timer = null;
+      if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+      video.pause();
+      video.srcObject = null;
+      setLiveUI(false);
+      camStarting.classList.add('hidden');
+      setButton(false);
+      active = false;
+      starting = false;
+      errorStreak = 0;
+      waitingShown = false;
+      if (window.App && App.mode === 'webcam') App.mode = 'idle';
+    }
+
+    function friendlyError(err) {
+      switch (err && err.name) {
+        case 'NotAllowedError':
+        case 'SecurityError':     return 'Camera access was blocked. Allow camera permission in your browser and try again.';
+        case 'NotFoundError':
+        case 'OverconstrainedError': return 'No camera was found on this device.';
+        case 'NotReadableError':  return 'The camera is being used by another app. Close it and try again.';
+        default:                  return 'Could not start the camera. Webcam access needs HTTPS or localhost.';
+      }
+    }
+
+    async function start() {
+      if (active || starting) return;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        App.showError('Your browser doesn’t support webcam access here. Try HTTPS or localhost.');
+        return;
+      }
+
+      App.resetScreen();                  // clears any uploaded image + results
+      const mySession = ++session;        // taken AFTER resetScreen (which calls stop)
+      starting = true;
+      App.mode = 'webcam';
+      App.setOccupied(true);              // same square container, solid border, X button
+      camStarting.classList.remove('hidden');
+      btnLabel.textContent = 'Starting…';
+
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
+          audio: false
+        });
+        if (mySession !== session) { s.getTracks().forEach((t) => t.stop()); return; }   // cancelled meanwhile
+
+        stream = s;
+        video.srcObject = s;
+        await video.play();
+        if (mySession !== session) return;
+
+        // If the camera is unplugged or revoked mid-stream
+        s.getVideoTracks()[0].addEventListener('ended', () => {
+          if (mySession !== session) return;
+          App.resetScreen();
+          App.showError('The camera disconnected.');
+        });
+
+        starting = false;
+        active = true;
+        camStarting.classList.add('hidden');
+        setLiveUI(true);
+        setButton(true);
+        Classifier.showMessage('<div class="spinner"></div><span>Looking for objects…</span>');
+        loop(mySession);
+      } catch (err) {
+        if (mySession !== session) return;
+        console.error('Webcam error:', err);
+        App.resetScreen();
+        App.showError(friendlyError(err));
+      }
+    }
+
+    // One analysis per ~300 ms. The next tick is only scheduled after the current
+    // one finishes, so a slow inference never piles up (a frame is simply skipped).
+    function loop(mySession) {
+      if (!active || mySession !== session) return;
+      const t0 = performance.now();
+      tick(mySession).finally(() => {
+        if (!active || mySession !== session) return;
+        const wait = Math.max(0, INTERVAL_MS - (performance.now() - t0));
+        timer = setTimeout(() => loop(mySession), wait);
+      });
+    }
+
+    async function tick(mySession) {
+      // Skip until the video has a real frame and the model is loaded
+      if (video.readyState < 2 || !video.videoWidth) return;
+      if (!window.AI || !window.AI.model) {
+        if (!waitingShown) {
+          waitingShown = true;
+          Classifier.showMessage('<div class="spinner"></div><span>Waiting for the AI to finish loading…</span>');
+        }
+        return;
+      }
+      try {
+        const predictions = await Classifier.predict(video);   // raw (un-mirrored) frame
+        if (!active || mySession !== session || !predictions) return;   // stopped mid-inference
+        waitingShown = false;
+        errorStreak = 0;
+        Classifier.renderLive(predictions);
+      } catch (err) {
+        console.error('Live classification failed:', err);
+        if (++errorStreak >= MAX_CONSECUTIVE_ERRORS && mySession === session) {
+          App.resetScreen();
+          App.showError('Live analysis stopped after repeated errors. Please try again.');
+        }
+      }
+    }
+
+    // Toggle button
+    btn.addEventListener('click', () => {
+      if (active || starting) App.resetScreen();   // stops the camera and restores the drop zone
+      else start();
+    });
+
+    // Turn the camera off when the tab is hidden or closed (privacy + battery)
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && (active || starting)) {
+        App.resetScreen();
+        App.showError('Webcam turned off because the tab was hidden.');
+      }
+    });
+    window.addEventListener('pagehide', stop);
+
+    window.Webcam = { stop, isActive: () => active };
+  })();
+</script>
+</body>
+</html>
