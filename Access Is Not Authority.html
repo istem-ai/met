@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access Is Not Authority</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #172b2a; background: #f7f8f4; line-height: 1.6; }
+    main { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { font-size: clamp(2rem, 6vw, 3rem); margin-bottom: .5rem; }
+    h2 { font-size: 1.35rem; }
+    .intro { font-size: 1.1rem; }
+    .scenario { border-left: 5px solid #27645e; padding: .2rem 1rem; background: #eaf2ee; }
+    fieldset { border: 0; padding: 0; margin: 1.75rem 0; }
+    legend { font-weight: 700; font-size: 1.2rem; margin-bottom: .65rem; }
+    label { display: block; margin: .45rem 0; padding: .75rem; border: 1px solid #8ba29b; border-radius: .35rem; background: white; cursor: pointer; }
+    label:has(input:checked) { border: 2px solid #205f57; background: #eaf2ee; padding: calc(.75rem - 1px); }
+    input { margin-right: .55rem; accent-color: #205f57; }
+    input:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #9a4c12; outline-offset: 3px; }
+    #response { border-top: 2px solid #27645e; padding-top: .5rem; }
+    .prompt { font-weight: 700; }
+    a { color: #17594f; text-underline-offset: .15em; }
+    details { margin-top: 2rem; border-top: 1px solid #aab9b2; padding-top: 1rem; }
+    summary { font-weight: 700; cursor: pointer; }
+    li { margin-bottom: .65rem; }
+    .note { font-size: .95rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Access is not authority</h1>
+    <p class="intro">Does being able to find a recording mean you can use it for a new purpose?</p>
+
+    <section class="scenario" aria-labelledby="case-title">
+      <h2 id="case-title">A fictional situation</h2>
+      <p>A community member records a language lesson for a local teaching project. Later, a copy appears in a public online archive. The recording’s permissions and community protocols are not provided in this scenario.</p>
+      <p>The situation is invented for discussion. It does not represent a particular community or its rules.</p>
+    </section>
+
+    <fieldset>
+      <legend>Compare a proposed use</legend>
+      <label><input type="radio" name="use" value="lesson" checked> Use the recording in the original teaching project</label>
+      <label><input type="radio" name="use" value="share"> Share the archive link in another course</label>
+      <label><input type="radio" name="use" value="train"> Use the recording to train a commercial AI model</label>
+    </fieldset>
+
+    <section id="response" aria-live="polite" aria-atomic="true">
+      <h2 id="response-title">Original teaching project</h2>
+      <p><strong>What we know:</strong> The recording was made for this project.</p>
+      <p><strong>What remains uncertain:</strong> We do not know the agreement’s terms, its duration, or who can approve continued use.</p>
+      <p class="prompt">Ask: Who should be involved in confirming that this use remains appropriate?</p>
+    </section>
+
+    <p><strong>Compare:</strong> What changes as the purpose moves from teaching, to sharing, to AI training? What information would you need before acting?</p>
+    <p class="note">The interface cannot decide whose permission is sufficient. Appropriate authority depends on the people, relationships, agreements, and protocols involved.</p>
+
+    <details>
+      <summary>Ideas and sources behind this activity</summary>
+      <p>This activity is an interpretation of the sources, not a case study reported by them.</p>
+      <ul>
+        <li><strong>Belarde-Lewis et al. (2024):</strong> Indigenous data stewardship involves relationships, trust, and authority that may be held by different community members or culture bearers. <a href="https://doi.org/10.5334/dsj-2024-032">Read the article</a>.</li>
+        <li><strong>Hess and Ostrom (2007):</strong> A knowledge commons is not the same thing as unrestricted open access; governance and participation matter. <em>Understanding Knowledge as a Commons</em>, introduction.</li>
+        <li><strong>Illingworth and Forsyth (2026):</strong> Opaque training data raises questions about representation, consent, and copyright. <em>GenAI in Higher Education</em>, chapter 3, pp. 38–44.</li>
+        <li><strong>Lewis, editor (2020):</strong> The <a href="https://spectrum.library.concordia.ca/id/eprint/986506/">Indigenous Protocol and Artificial Intelligence position paper</a> brings Indigenous and allied perspectives into the discussion of AI.</li>
+        <li><strong>Heritage Lab (n.d.):</strong> Its <a href="https://docs.heritagelab.ca/getting-started/data-sovereignty">Data Sovereignty Policy</a> describes an Indigenous-led organisation’s approach to stewardship and community control.</li>
+      </ul>
+      <p class="note">Source links require an internet connection. The activity itself runs offline.</p>
+    </details>
+  </main>
+
+  <script>
+    const content = {
+      lesson: {
+        title: "Original teaching project",
+        known: "The recording was made for this project.",
+        uncertain: "We do not know the agreement’s terms, its duration, or who can approve continued use.",
+        question: "Who should be involved in confirming that this use remains appropriate?"
+      },
+      share: {
+        title: "Sharing the archive link",
+        known: "A copy can be found in a public archive.",
+        uncertain: "Public access does not tell us whether wider circulation matches the original agreement or relevant community protocols.",
+        question: "Who could explain the context and conditions for sharing this recording?"
+      },
+      train: {
+        title: "Training a commercial AI model",
+        known: "The proposed use changes from accessing a recording to incorporating it into a model.",
+        uncertain: "We do not know whether training was contemplated or authorised, who holds relevant authority, or what control would remain after training.",
+        question: "Who would need to be involved, and what would meaningful authority to refuse or set conditions look like?"
+      }
+    };
+
+    const response = document.getElementById("response");
+    document.querySelectorAll('input[name="use"]').forEach(function (input) {
+      input.addEventListener("change", function () {
+        const item = content[this.value];
+        response.replaceChildren();
+        const title = document.createElement("h2");
+        title.textContent = item.title;
+        response.appendChild(title);
+        [
+          ["What we know: ", item.known],
+          ["What remains uncertain: ", item.uncertain],
+          ["Ask: ", item.question]
+        ].forEach(function (part) {
+          const paragraph = document.createElement("p");
+          const emphasis = document.createElement("strong");
+          emphasis.textContent = part[0];
+          paragraph.append(emphasis, document.createTextNode(part[1]));
+          response.appendChild(paragraph);
+        });
+      });
+    });
+  </script>
+</body>
+</html>
